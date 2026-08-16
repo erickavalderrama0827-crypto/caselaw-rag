@@ -3,6 +3,12 @@ import openai
 from io import BytesIO
 from docx import Document
 import os
+import tempfile
+from langchain_community.document_loaders import PyPDFLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import Chroma
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain.chains import RetrievalQA
 
 # Page Configuration
 st.set_page_config(
@@ -13,7 +19,9 @@ st.set_page_config(
 
 # Sidebar Navigation
 st.sidebar.title("CaseLaw RAG Suite")
-page = st.sidebar.radio("Navigation", ["🏠 Overview", "🔍 Precedent Search & RAG Brief Builder"])
+page = st.sidebar.radio("Navigation", ["🏠 Overview", "📂 PDF Ingestion & Vector Store", "🔍 Precedent Search & RAG Brief Builder"])
+
+openai_api_key = st.secrets.get("OPENAI_API_KEY")
 
 if page == "🏠 Overview":
     st.title("⚖️ CaseLaw RAG & Citation Verifier")
@@ -21,7 +29,7 @@ if page == "🏠 Overview":
 
     st.markdown("""
     Welcome to **CaseLaw RAG**, an advanced legal technology tool designed to eliminate hallucinated citations in legal research. 
-    By combining semantic vector search over BIA and federal circuit precedent with strict temperature-zero guardrails, 
+    By combining semantic vector search over BIA and federal circuit precedent via ChromaDB with strict temperature-zero guardrails, 
     this platform ensures every legal argument is backed by verifiable pin-citations.
     """)
 
@@ -30,119 +38,144 @@ if page == "🏠 Overview":
     col1, col2, col3 = st.columns(3)
     with col1:
         st.markdown("#### 📚 Document Ingestion")
-        st.markdown("Ingest binding precedent, BIA decisions, and circuit court rulings into a local vector database.")
+        st.markdown("Upload binding precedent, BIA decisions, and circuit court PDFs into a persistent local vector database.")
     with col2:
         st.markdown("#### 🔎 Semantic Retrieval")
-        st.markdown("Surface exact legal standards, statutory interpretations, and precedential holdings instantly.")
+        st.markdown("Surface exact legal standards, statutory interpretations, and precedential holdings instantly using vector similarity.")
     with col3:
         st.markdown("#### 🛡️ Zero Hallucination Guardrails")
-        st.markdown("Forces the LLM to ground all outputs strictly in retrieved text with mandatory source verification.")
+        st.markdown("Forces the LLM to ground all outputs strictly in retrieved chunks with mandatory source verification.")
 
     st.divider()
-    st.success("👈 Select **🔍 Precedent Search & RAG Brief Builder** in the sidebar to run queries.")
+    st.success("👈 Use the sidebar to upload PDFs or run grounded legal research queries.")
 
-elif page == "🔍 Precedent Search & RAG Brief Builder":
-    st.title("🔍 Legal Precedent Search & Argument Generator")
-    st.write("Query indexed BIA and federal asylum precedent to generate rigorous, citation-backed legal arguments.")
-
-    openai_api_key = st.secrets.get("OPENAI_API_KEY")
+elif page == "📂 PDF Ingestion & Vector Store":
+    st.title("📂 Legal Document Ingestion & Embedding")
+    st.write("Upload official legal precedent PDFs (e.g., BIA decisions, Circuit rulings) to index them into your local Chroma vector store.")
 
     if not openai_api_key:
         st.warning("⚠️ Please configure your OPENAI_API_KEY in your Streamlit app secrets.")
     else:
-        client = openai.OpenAI(api_key=openai_api_key)
-
-        # Sample Precedent Database Simulation (In production, this connects to ChromaDB + actual PDF embeddings)
-        precedent_database = {
-            "Matter of A-R-C-G-": (
-                "Matter of A-R-C-G-, 26 I&N Dec. 388 (BIA 2014): "
-                "The BIA recognized that married women in Guatemala who are unable to leave their relationship "
-                "can constitute a particular social group (PSG). Key holding: Private violence can form the basis "
-                "of asylum when the government is unable or unwilling to protect the victim."
-            ),
-            "Matter of L-E-A-": (
-                "Matter of L-E-A-, 27 I&N Dec. 581 (A.G. 2019): "
-                "Addressed whether family-based groups can qualify as a particular social group. "
-                "Holding: While family units may qualify, there must be independent evidence that society views "
-                "the specific family as a distinct social group, and the family tie must be the central reason for persecution."
-            ),
-            "Matter of C-A-L-": (
-                "Matter of C-A-L-, 23 I&N Dec. 751 (BIA 2005): "
-                "Addressed the requirement of state-action or acquiescence in torture/persecution claims. "
-                "Holding: Government acquiescence requires that public officials be aware of the wrongful activity "
-                "and breach their legal responsibility to intervene."
-            )
-        }
-
-        selected_precedent = st.selectbox(
-            "Select Precedent Corpus to Query:",
-            list(precedent_database.keys())
+        uploaded_pdfs = st.file_uploader(
+            "Upload Legal Precedent PDFs:",
+            type=["pdf"],
+            accept_multiple_files=True
         )
 
-        # Display the loaded snippet context
-        st.info(f"**Loaded Precedent Context:**\n\n{precedent_database[selected_precedent]}")
+        if uploaded_pdfs:
+            if st.button("Process & Embed PDFs into ChromaDB 🚀", type="primary"):
+                with st.spinner("Chunking documents and calculating vector embeddings..."):
+                    try:
+                        all_docs = []
+                        for pdf in uploaded_pdfs:
+                            # Save uploaded file to a temp file so LangChain can load it
+                            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+                                tmp_file.write(pdf.read())
+                                tmp_path = tmp_file.name
 
+                            loader = PyPDFLoader(tmp_path)
+                            docs = loader.load()
+                            all_docs.extend(docs)
+                            os.unlink(tmp_path) # Clean up temp file
+
+                        # Split text into manageable chunks
+                        text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+                        chunks = text_splitter.split_documents(all_docs)
+
+                        # Create embeddings and store in local Chroma vector database
+                        embeddings = OpenAIEmbeddings(openai_api_key=openai_api_key)
+                        vector_store = Chroma.from_documents(chunks, embeddings, persist_directory="./chroma_db")
+                        
+                        st.success(f"Successfully processed {len(uploaded_pdfs)} PDF(s) and embedded {len(chunks)} text chunks into ChromaDB!")
+                        st.info("💡 Your vector store is now ready. Go to **🔍 Precedent Search & RAG Brief Builder** to query your documents.")
+
+                    except Exception as e:
+                        st.error(f"Error processing PDFs: {e}")
+
+elif page == "🔍 Precedent Search & RAG Brief Builder":
+    st.title("🔍 Legal Precedent Search & Argument Generator")
+    st.write("Query your ingested legal database using semantic retrieval to generate rigorous, citation-backed legal arguments.")
+
+    if not openai_api_key:
+        st.warning("⚠️ Please configure your OPENAI_API_KEY in your Streamlit app secrets.")
+    else:
         legal_query = st.text_area(
             "Enter Legal Research Question or Client Fact Pattern:",
             height=140,
-            placeholder="e.g., Explain how the state-action requirement applies when local police refuse to investigate domestic violence threats..."
+            placeholder="e.g., What specific standard does the BIA apply when evaluating government acquiescence in domestic violence claims?"
         )
 
-        if st.button("Generate Verified Citation-Backed Brief 🚀", type="primary"):
+        if st.button("Generate Grounded Brief from Vector Store 🚀", type="primary"):
             if legal_query.strip():
-                with st.spinner("Retrieving legal context and generating strict citation-grounded response..."):
+                with st.spinner("Performing vector similarity search and drafting grounded legal brief..."):
                     try:
-                        retrieved_context = precedent_database[selected_precedent]
+                        # Load existing Chroma vector store
+                        embeddings = OpenAIEmbeddings(openai_api_key=openai_api_key)
+                        if not os.path.exists("./chroma_db"):
+                            st.warning("⚠️ No vector store found. Please upload and process PDFs in the 'PDF Ingestion' tab first.")
+                        else:
+                            vector_store = Chroma(persist_directory="./chroma_db", embedding_function=embeddings)
+                            retriever = vector_store.as_retriever(search_kwargs={"k": 4})
 
-                        response = client.chat.completions.create(
-                            model="gpt-4o-mini",
-                            messages=[
-                                {
-                                "role": "system",
-                                "content": (
-                                    "You are an expert legal research assistant and appellate brief writer. "
-                                    "You must answer the user's question strictly using ONLY the provided Precedent Context. "
-                                    "Do not extrapolate, assume, or hallucinate outside case law. "
-                                    "Provide: 1) Executive Legal Summary, 2) Direct Precedent Application with Pin-Citations, "
-                                    "and 3) Recommended Argumentation Strategy. If the context does not contain the answer, explicitly state so."
-                                )
-                                },
-                                {
-                                "role": "user",
-                                "content": f"Precedent Context:\n{retrieved_context}\n\nLegal Research Question / Fact Pattern:\n{legal_query}"
-                                }
-                            ],
-                            temperature=0.0
-                        )
-                        rag_output = response.choices[0].message.content
+                            # Retrieve relevant context chunks
+                            relevant_docs = retriever.get_relevant_documents(legal_query)
+                            context_text = "\n\n---\n\n".join([doc.page_content for doc in relevant_docs])
 
-                        st.success("Verified Legal Brief Generated Successfully!")
-                        st.markdown("---")
-                        st.markdown("### 📄 Grounded Legal Analysis & Citations")
-                        st.markdown(rag_output)
+                            # Call OpenAI with strict temperature-zero guardrails
+                            client = openai.OpenAI(api_key=openai_api_key)
+                            response = client.chat.completions.create(
+                                model="gpt-4o-mini",
+                                messages=[
+                                    {
+                                        "role": "system",
+                                        "content": (
+                                            "You are an expert legal research assistant and appellate brief writer. "
+                                            "Answer the user's research question strictly using ONLY the provided Precedent Context retrieved from the database. "
+                                            "Do not extrapolate or hallucinate outside the text. "
+                                            "Provide: 1) Executive Legal Summary, 2) Direct Precedent Application with Pin-Citations from the context, "
+                                            "and 3) Recommended Argumentation Strategy. If the context does not contain the answer, explicitly state so."
+                                        )
+                                    },
+                                    {
+                                        "role": "user",
+                                        "content": f"Retrieved Precedent Context:\n{context_text}\n\nLegal Research Question:\n{legal_query}"
+                                    }
+                                ],
+                                temperature=0.0
+                            )
+                            rag_output = response.choices[0].message.content
 
-                        # Word Document Export
-                        doc = Document()
-                        doc.add_heading(f"Legal Brief & Precedent Analysis: {selected_precedent}", level=1)
-                        doc.add_paragraph(f"Query: {legal_query}\n")
-                        doc.add_paragraph(rag_output)
+                            st.success("Grounded Legal Brief Generated Successfully!")
+                            st.markdown("---")
+                            st.markdown("### 📄 Verified Legal Analysis & Retrieved Citations")
+                            st.markdown(rag_output)
 
-                        doc_io = BytesIO()
-                        doc.save(doc_io)
-                        doc_io.seek(0)
+                            # Word Document Export
+                            doc = Document()
+                            doc.add_heading("Legal Brief & Vector Precedent Analysis", level=1)
+                            doc.add_paragraph(f"Query: {legal_query}\n")
+                            doc.add_paragraph(rag_output)
 
-                        st.download_button(
-                            label="📥 Download Legal Brief (.docx)",
-                            data=doc_io,
-                            file_name=f"Legal_Brief_{selected_precedent.replace(' ', '_')}.docx",
-                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                        )
+                            doc_io = BytesIO()
+                            doc.save(doc_io)
+                            doc_io.seek(0)
 
-                        st.markdown("---")
-                        st.markdown("### 🔒 Human-in-the-Loop (HITL) Sign-Off")
-                        st.checkbox("Attorney Verification: Confirm citation accuracy and verify holding application against primary source text.")
+                            st.download_button(
+                                label="📥 Download Legal Brief (.docx)",
+                                data=doc_io,
+                                file_name="CaseLaw_RAG_Brief.docx",
+                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                            )
+
+                            st.markdown("---")
+                            st.markdown("### 🔒 Human-in-the-Loop (HITL) Sign-Off")
+                            st.checkbox("Attorney Verification: Confirm citation accuracy against source documents before filing.")
 
                     except Exception as e:
-                        st.error(f"OpenAI API Error: {e}. Please check your API key secrets.")
+                        st.error(f"RAG Execution Error: {e}")
             else:
-                st.warning("⚠️ Please enter a legal research question or fact pattern.")
+                st.warning("⚠️ Please enter a legal research question.")
+   
+  
+                            
+                            
