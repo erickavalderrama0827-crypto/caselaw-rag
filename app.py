@@ -5,7 +5,7 @@ from docx import Document
 import os
 import tempfile
 from langchain_community.document_loaders import PyPDFLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain.chains import RetrievalQA
@@ -118,7 +118,7 @@ elif page == "🔍 Precedent Search & RAG Brief Builder":
                             retriever = vector_store.as_retriever(search_kwargs={"k": 4})
 
                             # Retrieve relevant context chunks
-                            relevant_docs = retriever.get_relevant_documents(legal_query)
+                            relevant_docs = retriever.invoke(legal_query)
                             context_text = "\n\n---\n\n".join([doc.page_content for doc in relevant_docs])
 
                             # Call OpenAI with strict temperature-zero guardrails
@@ -176,6 +176,6 @@ elif page == "🔍 Precedent Search & RAG Brief Builder":
             else:
                 st.warning("⚠️ Please enter a legal research question.")
    
-  
-                            
-                            
+    
+
+       
